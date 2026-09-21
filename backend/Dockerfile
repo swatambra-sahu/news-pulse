@@ -2,11 +2,13 @@
 # scraper subprocess triggered by POST /ingest/trigger), so a plain Node
 # buildpack isn't enough on most PaaS providers - a Docker image is the
 # simplest way to guarantee both runtimes are present together.
-FROM node:20-slim
+FROM node:22-slim
 
-# Python + pip for the scraper subprocess
+# Python + pip for the scraper subprocess, plus a C/C++ toolchain
+# (build-essential) since better-sqlite3 compiles a native addon via
+# node-gyp when no prebuilt binary matches the platform/Node ABI.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
