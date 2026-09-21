@@ -1,0 +1,34 @@
+name: Scheduled scrape
+
+# Optional alternative/supplement to triggering the pipeline via
+# POST /ingest/trigger: run it on a schedule from GitHub Actions.
+#
+# NOTE: this workflow needs the SQLite DB to live somewhere persistent and
+# reachable from the runner (e.g. checked into a data branch, or swapped
+# for a hosted Postgres connection string in DATABASE_URL). As configured,
+# it's disabled (workflow_dispatch only) since this assessment's default
+# deployment triggers ingestion on-demand via the backend API instead.
+on:
+  workflow_dispatch: {}
+  # schedule:
+  #   - cron: "0 * * * *"  # hourly
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: scraper
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        working-directory: scraper
+        env:
+          DB_PATH: ${{ vars.DB_PATH }}
+        run: python main.py
