@@ -4,10 +4,14 @@
 # image at backend/Dockerfile (context = repo root, so it can COPY both
 # backend/ and scraper/).
 #
-# NOTE: Render's free-tier disks are ephemeral across deploys, so the
-# SQLite file (and thus scraped data) will reset on redeploy. Attach a
-# persistent disk (Render "Disks" add-on) mounted at /app/data, or swap to
-# a hosted Postgres, for durability. See README's Deployment section.
+# NOTE on persistence: Render's free tier does not support attaching a
+# persistent disk (that's a paid-plan feature), so DB_PATH below lives on
+# the container's ephemeral local filesystem - the SQLite file survives
+# while the instance is up, but resets on every redeploy/restart (just
+# re-run POST /ingest/trigger afterward to repopulate it). If you upgrade
+# to a paid plan, uncomment the disk block below to persist data at
+# /app/data across deploys, or swap to a hosted Postgres for durability
+# on free tier. See README's Deployment section.
 services:
   - type: web
     name: news-pulse-backend
@@ -18,17 +22,18 @@ services:
     envVars:
       - key: PORT
         value: 4000
-      - key: CORS_ORIGIN
-        sync: false # set to your deployed frontend URL
       - key: DB_PATH
         value: /app/data/newspulse.sqlite3
       - key: PYTHON_BIN
         value: /app/scraper/.venv/bin/python
       - key: SCRAPER_PATH
         value: /app/scraper/main.py
+      - key: CORS_ORIGIN
+        sync: false # set to your deployed frontend URL
       - key: FEEDS
-        sync: false # optional override, see scraper/config.py
-    disk:
-      name: news-pulse-data
-      mountPath: /app/data
-      sizeGB: 1
+        sync: false # optional, comma-separated "Name|URL" pairs, see scraper/config.py
+    # disk:
+    #   name: news-pulse-data
+    #   mountPath: /app/data
+    #   sizeGB: 1
+    #   (requires a paid Render plan - free tier does not support disks)
