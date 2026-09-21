@@ -23,6 +23,112 @@ infra for local dev and review, and is one of the officially-allowed
 options. See **Deployment** below for the tradeoff this creates on
 ephemeral hosting.
 
+### Data Flow Diagram
+
+```mermaid
+flowchart TB
+    subgraph Sources["RSS Sources"]
+        BBC[BBC News]
+        NPR[NPR]
+        AJ[Al Jazeera]
+    end
+
+    subgraph Scraper["Python Scraper (scraper/)"]
+        feeds[feeds.py<br/>fetch + normalize feed entries]
+        extract[extract.py<br/>fetch full article body<br/>trafilatura → bs4 fallback]
+        cluster[cluster.py<br/>tokenize + Union-Find grouping]
+        db_py[db.py<br/>SQLite read/write]
+        main[main.py<br/>orchestrates the run]
+    end
+
+    subgraph Data["Shared SQLite DB"]
+        sqlite[(newspulse.sqlite3<br/>articles + clusters tables)]
+    end
+
+    subgraph Backend["Node/Express Backend (backend/)"]
+        routes[routes: clusters, timeline, ingest]
+        ingestJobs[ingestJobs.js<br/>spawns python subprocess<br/>tracks job status in-memory]
+    end
+
+    subgraph Frontend["Next.js Frontend (frontend/)"]
+        page[page.js<br/>state + data fetching]
+        timeline_ui[Timeline.js<br/>custom lane-based chart]
+        detail[ClusterDetail.js]
+        filter[SourceFilter.js]
+        refresh[RefreshButton.js]
+    end
+
+    BBC --> feeds
+    NPR --> feeds
+    AJ --> feeds
+    feeds --> main
+    main --> extract
+    extract --> main
+    main --> cluster
+    cluster --> main
+    main --> db_py
+    db_py --> sqlite
+
+    sqlite --> routes
+    routes --> page
+    refresh -->|POST /ingest/trigger| ingestJobs
+    ingestJobs -->|spawn subprocess| main
+    ingestJobs -->|poll status| refresh
+
+    page --> timeline_ui
+    page --> filter
+    timeline_ui --> detail
+```
+
+### Component Details
+
+**Scraper (`scraper/`)**
+- `feeds.py` — fetches each RSS feed and normalizes inconsistent field names
+  (`<description>` vs `<content:encoded>`) and date formats into one schema:
+  `{url, title, summary, source, published_at}`. Wraps each feed fetch in
+  try/except so one broken feed never kills the run.
+- `extract.py` — fetches the full article page and pulls out the main body
+  via `trafilatura`, falling back to a plain BeautifulSoup `<p>`-tag scrape,
+  and finally to the RSS summary if both fail. Never raises.
+- `cluster.py` — tokenizes `title + summary`, drops stop words, and links
+  articles sharing ≥3 meaningful words or Jaccard similarity ≥0.25. A
+  Union-Find structure merges transitively related articles into one
+  cluster, then labels each cluster with its most frequent shared words.
+- `db.py` — SQLite schema (`articles`, `clusters` tables); `url UNIQUE` +
+  `INSERT OR IGNORE` makes re-running the scraper idempotent.
+- `main.py` — orchestrates a run: skip already-seen URLs, extract full text
+  only for new articles, recluster the recent window from scratch, and
+  print a machine-readable `SCRAPE_RESULT: {json}` line for the Node
+  backend to capture from the subprocess's stdout.
+
+**Backend (`backend/`)**
+- `routes/clusters.js` — `GET /clusters` (label, article count, time range)
+  and `GET /clusters/:id` (full article list, sorted chronologically, with
+  400/404 handling).
+- `routes/timeline.js` — `GET /timeline`, shaped for a charting library:
+  `start_time`/`end_time`, `article_count`, and a normalized `intensity`
+  (`article_count / maxCount`) so the frontend can size markers without
+  recomputing anything.
+- `routes/ingest.js` + `ingestJobs.js` — `POST /ingest/trigger` spawns the
+  Python scraper as a subprocess and returns a `jobId` immediately;
+  `GET /ingest/status/:jobId` polls an in-memory job map that's updated
+  when the subprocess closes.
+
+**Frontend (`frontend/`)**
+- `app/page.js` — top-level state: timeline data, active source filters,
+  selected cluster.
+- `components/Timeline.js` (+ `lib/timeGeometry.js`) — a custom-built
+  timeline (no charting library): a linear time scale maps timestamps to
+  horizontal position, overlapping clusters are packed into non-overlapping
+  lanes, and block opacity scales with `intensity` (bigger cluster = bolder
+  marker).
+- `components/ClusterDetail.js` — fetches `/clusters/:id` and renders the
+  article list for the selected cluster.
+- `components/SourceFilter.js` — toggle chips per source, filters the
+  timeline client-side.
+- `components/RefreshButton.js` — calls `POST /ingest/trigger`, polls
+  `GET /ingest/status/:jobId` until done, then reloads the timeline.
+
 ## News Sources Used
 
 - BBC News — `http://feeds.bbci.co.uk/news/rss.xml`
